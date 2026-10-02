@@ -82,6 +82,11 @@ make deb    # -> dist/screenport_1.0.0_all.deb
 ```
 
 Seuls `dpkg-deb` et `python3` sont nécessaires pour construire le paquet.
+
+Publier une nouvelle version : augmentez `VERSION` dans `screenport/__init__.py`, ajoutez
+`docs/release-notes/v<version>.md` (et une entrée dans `packaging/debian/changelog`), puis
+poussez sur la branche principale. Le workflow crée alors le tag et la release GitHub avec
+le `.deb`.
 Pour lancer l'application directement depuis les sources :
 
 ```bash
