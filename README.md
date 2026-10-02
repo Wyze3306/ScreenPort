@@ -51,13 +51,18 @@ un redémarrage de votre PC).
 Distributions prises en charge : **Ubuntu 24.04+**, **Debian 13+**, **Linux Mint 22+**,
 Pop!_OS 24.04+ et dérivées (libadwaita 1.5 minimum).
 
-1. Récupérez `screenport_1.0.0_all.deb` dans les
-   [Releases](https://github.com/Wyze3306/ScreenPort/releases) ou dans les artefacts de
-   l'onglet *Actions* (workflow « Paquet .deb »).
+1. Téléchargez [`screenport_1.0.0_all.deb`](https://github.com/Wyze3306/ScreenPort/releases/latest/download/screenport_1.0.0_all.deb)
+   depuis les [Releases](https://github.com/Wyze3306/ScreenPort/releases).
 2. Installez-le (apt installe automatiquement les dépendances) :
 
    ```bash
    sudo apt install ./screenport_1.0.0_all.deb
+   ```
+
+   Ou en une ligne :
+
+   ```bash
+   wget https://github.com/Wyze3306/ScreenPort/releases/latest/download/screenport_1.0.0_all.deb && sudo apt install ./screenport_1.0.0_all.deb
    ```
 
 3. Lancez **ScreenPort** depuis le menu des applications, ou `screenport` dans un terminal.
