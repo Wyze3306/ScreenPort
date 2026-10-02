@@ -1,0 +1,21 @@
+Package: screenport
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: all
+Maintainer: Wyze3306 <Wyze3306@users.noreply.github.com>
+Installed-Size: @SIZE@
+Depends: python3 (>= 3.10), python3-gi (>= 3.42), gir1.2-glib-2.0, gir1.2-gtk-4.0 (>= 4.12), gir1.2-adw-1 (>= 1.5), gir1.2-vte-3.91 (>= 0.76), openssh-client
+Recommends: gir1.2-secret-1, librsvg2-common
+Suggests: screen
+Homepage: https://github.com/Wyze3306/ScreenPort
+Description: graphical SSH client for named GNU screen sessions
+ ScreenPort connects to your servers over SSH (password, private key or
+ agent) and opens several terminals at once, each one attached to a GNU
+ screen session with a custom name. If the screen session does not exist it
+ is created on the server, otherwise ScreenPort simply reattaches to it.
+ .
+ Features: saved servers with colours and favourite screens, tabs and a
+ mosaic view, listing/renaming/killing remote screens, automatic
+ reconnection, session restore at startup, passwords kept in the system
+ keyring and import from ~/.ssh/config. The interface is in French.

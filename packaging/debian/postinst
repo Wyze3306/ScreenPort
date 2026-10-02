@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ] && command -v python3 >/dev/null 2>&1; then
+    # Précompile le code Python pour accélérer le démarrage.
+    python3 -m compileall -q /usr/lib/screenport/screenport >/dev/null 2>&1 || true
+fi
+
+exit 0

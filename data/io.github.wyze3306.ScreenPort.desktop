@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=ScreenPort
+GenericName=Client SSH et screen
+GenericName[en]=SSH and screen client
+Comment=Ouvrez plusieurs terminaux SSH, chacun sur une session screen nommée
+Comment[en]=Open several SSH terminals, each on a named GNU screen session
+Exec=screenport
+Icon=io.github.wyze3306.ScreenPort
+Terminal=false
+Categories=Network;RemoteAccess;GTK;
+Keywords=ssh;screen;terminal;serveur;server;remote;console;
+StartupNotify=true
+StartupWMClass=io.github.wyze3306.ScreenPort

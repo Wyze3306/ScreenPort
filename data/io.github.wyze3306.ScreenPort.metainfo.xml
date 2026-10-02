@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.wyze3306.ScreenPort</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>ScreenPort</name>
+  <summary>Terminaux SSH sur des sessions GNU screen nommées</summary>
+  <description>
+    <p>
+      ScreenPort se connecte à vos serveurs en SSH (mot de passe, clé privée ou
+      agent) et ouvre plusieurs terminaux en même temps, chacun rattaché à une
+      session GNU screen portant le nom de votre choix. Si le screen n'existe
+      pas, il est créé sur le serveur ; sinon ScreenPort s'y rattache
+      directement.
+    </p>
+    <ul>
+      <li>Liste de serveurs avec couleurs et screens favoris</li>
+      <li>Onglets et vue mosaïque pour voir tous les terminaux côte à côte</li>
+      <li>Liste, renommage et arrêt des screens existants</li>
+      <li>Reconnexion automatique et réouverture des sessions au démarrage</li>
+      <li>Mots de passe conservés dans le trousseau du système</li>
+      <li>Import des hôtes de ~/.ssh/config</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.wyze3306.ScreenPort.desktop</launchable>
+  <developer id="io.github.wyze3306">
+    <name>Wyze3306</name>
+  </developer>
+  <url type="homepage">https://github.com/Wyze3306/ScreenPort</url>
+  <url type="bugtracker">https://github.com/Wyze3306/ScreenPort/issues</url>
+  <provides>
+    <binary>screenport</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-10-02">
+      <description>
+        <p>Première version.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,58 @@
+name: Paquet .deb
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer les dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-vte-3.91 gir1.2-secret-1 \
+            openssh-client lintian desktop-file-utils appstream
+
+      - name: Tests unitaires
+        run: python3 -m unittest discover -s tests -t . -v
+
+      - name: Vérifier le chargement des modules GTK
+        run: python3 -c "import screenport.application, screenport.window, screenport.preferences"
+
+      - name: Valider les métadonnées
+        run: |
+          desktop-file-validate data/io.github.wyze3306.ScreenPort.desktop
+          appstreamcli validate --no-net data/io.github.wyze3306.ScreenPort.metainfo.xml
+
+      - name: Construire le paquet
+        run: packaging/build-deb.sh
+
+      - name: Lintian
+        run: lintian --tag-display-limit 0 dist/*.deb
+
+      - name: Tester l'installation
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          screenport --version
+          test -x /usr/lib/screenport/bin/screenport-askpass
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenport-deb
+          path: dist/*.deb
+
+      - name: Publier la release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb

@@ -1,0 +1,7 @@
+screenport (1.0.0) unstable; urgency=medium
+
+  * Initial release: SSH connections (password, key or agent), named GNU
+    screen sessions created or reattached on demand, tabs and mosaic view,
+    automatic reconnection, session restore and keyring integration.
+
+ -- Wyze3306 <Wyze3306@users.noreply.github.com>  Fri, 02 Oct 2026 12:00:00 +0000

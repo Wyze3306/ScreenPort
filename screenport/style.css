@@ -1,0 +1,138 @@
+/* ScreenPort — feuille de style */
+
+/* Pastille ronde avec les initiales du serveur */
+.server-badge {
+  min-width: 34px;
+  min-height: 34px;
+  border-radius: 9999px;
+  font-weight: 800;
+  font-size: 0.85em;
+  color: white;
+  text-shadow: 0 1px 1px alpha(black, 0.25);
+}
+
+.server-title {
+  font-weight: 600;
+}
+
+.blue   { background: linear-gradient(135deg, #62a0ea, #1c71d8); }
+.teal   { background: linear-gradient(135deg, #33b6c8, #1a7d8f); }
+.green  { background: linear-gradient(135deg, #57c272, #26843a); }
+.yellow { background: linear-gradient(135deg, #f0c02d, #c88800); }
+.orange { background: linear-gradient(135deg, #ff8a3d, #d14a00); }
+.red    { background: linear-gradient(135deg, #f66151, #c01c28); }
+.pink   { background: linear-gradient(135deg, #f08fbc, #c64889); }
+.purple { background: linear-gradient(135deg, #c061cb, #813d9c); }
+.slate  { background: linear-gradient(135deg, #98a8b8, #5e6f80); }
+
+/* Compteur de terminaux ouverts dans la barre latérale */
+.count-pill {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 9999px;
+  font-size: 0.8em;
+  font-weight: 700;
+  background: alpha(@accent_bg_color, 0.18);
+  color: @accent_color;
+}
+
+.row-menu {
+  opacity: 0.55;
+}
+
+row:hover .row-menu {
+  opacity: 1;
+}
+
+.sidebar-bottom {
+  padding: 6px;
+}
+
+/* Sélecteur de couleur dans l'éditeur de serveur */
+button.color-choice {
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border-radius: 9999px;
+  box-shadow: inset 0 0 0 1px alpha(black, 0.12);
+}
+
+button.color-choice:checked {
+  box-shadow: 0 0 0 2px @window_bg_color, 0 0 0 4px @accent_color;
+}
+
+/* Terminaux */
+vte-terminal {
+  padding: 6px 10px;
+}
+
+.terminal-pane {
+  background: transparent;
+}
+
+/* Mosaïque */
+.mosaic {
+  padding: 8px;
+  background: shade(@window_bg_color, 0.96);
+}
+
+.mosaic-cell {
+  border-radius: 12px;
+  border: 1px solid alpha(currentColor, 0.12);
+  background: @window_bg_color;
+}
+
+.mosaic-cell > overlay {
+  border-radius: 0 0 11px 11px;
+}
+
+.mosaic-cell.focused {
+  border-color: @accent_color;
+  box-shadow: 0 0 0 1px @accent_color;
+}
+
+.pane-header {
+  padding: 3px 4px 3px 12px;
+  min-height: 30px;
+}
+
+.mosaic-cell.focused .pane-header .heading {
+  color: @accent_color;
+}
+
+.color-dot {
+  min-width: 10px;
+  min-height: 10px;
+  border-radius: 9999px;
+}
+
+/* Bandeau de fin de session */
+.session-banner {
+  padding: 12px 14px 12px 18px;
+  border-radius: 14px;
+  background: alpha(@popover_bg_color, 0.97);
+  color: @popover_fg_color;
+  box-shadow: 0 2px 10px alpha(black, 0.35), 0 0 0 1px alpha(black, 0.12);
+}
+
+/* Dialogue d'ouverture */
+.dialog-bottom-bar {
+  padding: 10px 16px;
+}
+
+.status-pill {
+  padding: 1px 8px;
+  border-radius: 9999px;
+  font-size: 0.8em;
+  font-weight: 700;
+}
+
+.status-pill.open {
+  background: alpha(@accent_bg_color, 0.15);
+  color: @accent_color;
+}
+
+.status-pill.attached {
+  background: alpha(@success_color, 0.15);
+  color: @success_color;
+}

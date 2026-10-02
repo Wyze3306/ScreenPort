@@ -1,0 +1,37 @@
+.TH SCREENPORT 1 "2026-10-02" "ScreenPort 1.0.0" "User Commands"
+.SH NAME
+screenport \- graphical SSH client for named GNU screen sessions
+.SH SYNOPSIS
+.B screenport
+[\fB\-\-open\fR \fISERVER\fR [\fB\-\-screen\fR \fINAME\fR]...]
+.SH DESCRIPTION
+.B ScreenPort
+connects to SSH servers (password, private key or SSH agent) and opens
+several terminals at once, each one attached to a GNU screen session with a
+custom name. A missing session is created on the server; an existing one is
+simply reattached.
+.SH OPTIONS
+.TP
+.BR \-o ", " \-\-open " " \fISERVER\fR
+Open the given saved server (name, identifier or user@host).
+.TP
+.BR \-s ", " \-\-screen " " \fINAME\fR
+With \fB\-\-open\fR, attach to (or create) this screen session directly.
+May be repeated.
+.TP
+.BR \-v ", " \-\-version
+Print the version and exit.
+.SH FILES
+.TP
+.I ~/.config/screenport/servers.json
+Saved servers (no secrets).
+.TP
+.I ~/.config/screenport/settings.json
+Preferences and the list of tabs to restore.
+.SH ENVIRONMENT
+.TP
+.B SCREENPORT_DEBUG
+Print the ssh command lines that are executed.
+.SH SEE ALSO
+.BR ssh (1),
+.BR screen (1)

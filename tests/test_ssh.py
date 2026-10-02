@@ -1,0 +1,164 @@
+import os
+import shutil
+import subprocess
+import unittest
+
+from screenport import ssh
+from screenport.models import AUTH_AGENT, AUTH_KEY, AUTH_PASSWORD, Server
+
+SCREEN_LS = """There are screens on:
+\t12345.main\t(10/02/26 15:19:44)\t(Detached)
+\t678.logs\t(10/02/2026 03:19:44 PM)\t(Attached)
+\t91.shared\t(Multi, attached)
+\t5.old\t(Dead ???)
+3 Sockets in /run/screen/S-demo.
+"""
+
+
+class ScreenLsParsingTest(unittest.TestCase):
+    def test_sessions(self):
+        sessions = ssh.parse_screen_ls(SCREEN_LS)
+        self.assertEqual([s.name for s in sessions], ["main", "logs", "shared", "old"])
+        main, logs, shared, old = sessions
+        self.assertEqual(main.pid, 12345)
+        self.assertEqual(main.id, "12345.main")
+        self.assertFalse(main.attached)
+        self.assertEqual(main.state_label, "Détaché")
+        self.assertEqual(main.pretty_date, "02/10/2026 à 15:19")
+        self.assertTrue(logs.attached)
+        self.assertEqual(logs.pretty_date, "02/10/2026 à 15:19")
+        self.assertTrue(shared.attached)
+        self.assertEqual(shared.state_label, "Attaché (partagé)")
+        self.assertTrue(old.dead)
+
+    def test_no_sessions(self):
+        self.assertEqual(ssh.parse_screen_ls("No Sockets found in /run/screen/S-demo.\n"), [])
+
+    def test_space_separated(self):
+        sessions = ssh.parse_screen_ls("  42.build (Detached)\n")
+        self.assertEqual(sessions[0].name, "build")
+        self.assertEqual(sessions[0].state, "Detached")
+
+    def test_list_output_markers(self):
+        out = "motd noise\n__SCREENPORT_BEGIN__\n__SCREENPORT_SCREEN__=yes\n" + SCREEN_LS + "__SCREENPORT_END__\n"
+        listing = ssh.parse_list_output(out)
+        self.assertTrue(listing.ok)
+        self.assertTrue(listing.has_screen)
+        self.assertEqual(len(listing.sessions), 4)
+
+    def test_list_output_without_screen(self):
+        listing = ssh.parse_list_output("__SCREENPORT_BEGIN__\n__SCREENPORT_SCREEN__=no\n__SCREENPORT_END__\n")
+        self.assertTrue(listing.ok)
+        self.assertFalse(listing.has_screen)
+
+    def test_list_output_garbage(self):
+        self.assertFalse(ssh.parse_list_output("Permission denied").ok)
+
+
+class RemoteCommandTest(unittest.TestCase):
+    def test_attach_command_is_safe_single_line(self):
+        for command in (
+            ssh.remote_attach_command("main"),
+            ssh.remote_attach_command("web-1", ssh.ATTACH_SHARE, 5000),
+            ssh.remote_list_command(),
+            ssh.remote_kill_command("main"),
+            ssh.remote_rename_command("a", "b"),
+        ):
+            self.assertTrue(command.startswith("sh -c '"))
+            self.assertNotIn("\n", command)
+            self.assertNotIn("!", command)
+            # Une seule paire d'apostrophes : le script n'en contient aucune.
+            self.assertEqual(command.count("'"), 2)
+
+    def test_invalid_names_rejected(self):
+        for bad in ("", "a b", "x;rm -rf /", "$(id)", "a'b", "é"):
+            with self.assertRaises(ValueError):
+                ssh.remote_attach_command(bad)
+            with self.assertRaises(ValueError):
+                ssh.remote_kill_command(bad)
+
+    def test_history_is_clamped(self):
+        self.assertIn(" 100", ssh.remote_attach_command("main", history=1))
+
+    def test_shell_only(self):
+        self.assertIn("exec", ssh.remote_attach_command(ssh.SHELL_ONLY))
+
+    @unittest.skipUnless(shutil.which("sh"), "sh requis")
+    def test_scripts_parse_in_sh(self):
+        """Chaque script doit être syntaxiquement valide pour sh -n."""
+        for command in (
+            ssh.remote_attach_command("main"),
+            ssh.remote_list_command(),
+            ssh.remote_kill_command("main"),
+            ssh.remote_rename_command("a", "b"),
+        ):
+            script = command.split("'")[1]
+            result = subprocess.run(["sh", "-n", "-c", script], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class SshArgvTest(unittest.TestCase):
+    def setUp(self):
+        self.options = ssh.SshOptions()
+
+    def test_password_server(self):
+        server = Server(host="example.org", user="alice", port=2200, auth=AUTH_PASSWORD)
+        argv = ssh.build_ssh_argv(server, self.options, remote_command="true", runtime_dir="/run/x")
+        self.assertEqual(argv[:2], ["ssh", "-t"])
+        self.assertIn("2200", argv)
+        self.assertIn("PreferredAuthentications=password,keyboard-interactive,publickey", argv)
+        self.assertIn("ControlMaster=auto", argv)
+        self.assertIn("ControlPath=/run/x/cm-%C", argv)
+        self.assertIn("StrictHostKeyChecking=accept-new", argv)
+        separator = argv.index("--")
+        self.assertEqual(argv[separator + 1:], ["alice@example.org", "true"])
+
+    def test_key_server_no_tty_no_mux(self):
+        server = Server(host="h", user="bob", auth=AUTH_KEY, key_path="~/.ssh/id_ed25519")
+        argv = ssh.build_ssh_argv(server, ssh.SshOptions(multiplex=False), tty=False, password_prompts=1)
+        self.assertIn("-T", argv)
+        self.assertIn("-n", argv)
+        self.assertIn(os.path.expanduser("~/.ssh/id_ed25519"), argv)
+        self.assertIn("IdentitiesOnly=yes", argv)
+        self.assertIn("NumberOfPasswordPrompts=1", argv)
+        self.assertFalse(any(a.startswith("ControlMaster") for a in argv))
+
+    def test_agent_server_without_user(self):
+        server = Server(host="h", auth=AUTH_AGENT)
+        argv = ssh.build_ssh_argv(server, ssh.SshOptions(accept_new_hostkeys=False, keepalive=0))
+        self.assertEqual(argv[-1], "h")
+        self.assertIn("StrictHostKeyChecking=ask", argv)
+        self.assertFalse(any(a.startswith("ServerAlive") for a in argv))
+
+    def test_askpass_env(self):
+        env = ssh.askpass_env("/bin/askpass", "s3cret", "password")
+        self.assertEqual(env["SSH_ASKPASS_REQUIRE"], "force")
+        self.assertEqual(env["SCREENPORT_SECRET"], "s3cret")
+        self.assertEqual(ssh.askpass_env("/bin/askpass", None, None, force=False), {})
+        self.assertNotIn("SCREENPORT_SECRET", ssh.askpass_env("/bin/askpass", None, None))
+
+    def test_command_preview(self):
+        server = Server(host="h", user="u", port=2222, auth=AUTH_KEY, key_path="~/k")
+        self.assertEqual(ssh.command_preview(server), "ssh -p 2222 -i '~/k' u@h")
+
+
+class ErrorTest(unittest.TestCase):
+    def test_known_errors(self):
+        cases = {
+            "demo@h: Permission denied (publickey,password).": "Authentification refusée",
+            "ssh: Could not resolve hostname nope: Name or service not known": "Serveur introuvable",
+            "ssh: connect to host h port 22: Connection refused": "Connexion refusée",
+            "ssh: connect to host h port 22: Connection timed out": "Délai dépassé",
+            "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@": "La clé du serveur a changé",
+        }
+        for stderr, title in cases.items():
+            self.assertEqual(ssh.humanize_ssh_error(stderr, 255).title, title)
+        self.assertTrue(ssh.humanize_ssh_error("Permission denied", 255).auth_failed)
+
+    def test_unknown_error_keeps_last_line(self):
+        error = ssh.humanize_ssh_error("first\nsomething odd happened", 255)
+        self.assertEqual(error.detail, "something odd happened")
+
+
+if __name__ == "__main__":
+    unittest.main()
