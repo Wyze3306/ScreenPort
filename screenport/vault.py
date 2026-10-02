@@ -57,6 +57,9 @@ class Vault:
                     self._keyring_ok = True
                 except Exception as exc:  # GLib.Error, D-Bus absent...
                     log.info("Trousseau indisponible, repli sur fichier : %s", exc)
+        # Le choix est fait une seule fois : une erreur ponctuelle du trousseau
+        # (déverrouillage refusé...) ne doit jamais faire basculer les secrets
+        # vers le fichier local.
         return self._keyring_ok
 
     # -- fichier de repli -------------------------------------------------
@@ -78,7 +81,7 @@ class Vault:
                     return value
             except Exception as exc:
                 log.warning("Lecture du trousseau impossible : %s", exc)
-                self._keyring_ok = False
+        # Secrets enregistrés quand aucun trousseau n'était disponible.
         encoded = self._file_load().get(f"{server_id}:{kind}")
         if encoded:
             try:
@@ -87,7 +90,9 @@ class Vault:
                 return None
         return None
 
-    def set(self, server_id: str, kind: str, secret: str, label: str) -> None:
+    def set(self, server_id: str, kind: str, secret: str, label: str) -> bool:
+        """Enregistre un secret ; renvoie False si le trousseau l'a refusé
+        (le secret n'est alors écrit nulle part)."""
         if self._use_keyring():
             try:
                 Secret.password_store_sync(
@@ -99,13 +104,14 @@ class Vault:
                     None,
                 )
                 self._file_delete(server_id, kind)
-                return
+                return True
             except Exception as exc:
                 log.warning("Écriture dans le trousseau impossible : %s", exc)
-                self._keyring_ok = False
+                return False
         data = self._file_load()
         data[f"{server_id}:{kind}"] = base64.b64encode(secret.encode("utf-8")).decode("ascii")
         self._file_save(data)
+        return True
 
     def delete(self, server_id: str, kind: str | None = None) -> None:
         kinds = [kind] if kind else ["password", "passphrase"]

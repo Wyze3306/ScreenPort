@@ -77,7 +77,8 @@ class WindowState:
     mosaic: bool = False
     # Liste de {"server": id, "screen": nom} des onglets ouverts.
     sessions: list[dict] = field(default_factory=list)
-    selected: int = 0
+    # Onglet sélectionné : {"server": id, "screen": nom}.
+    selected_key: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict) -> "WindowState":
@@ -88,10 +89,13 @@ class WindowState:
         if not isinstance(state.sessions, list):
             state.sessions = []
         state.sessions = [
-            s
+            {"server": s["server"], "screen": s["screen"]}
             for s in state.sessions
             if isinstance(s, dict) and isinstance(s.get("server"), str) and isinstance(s.get("screen"), str)
         ]
+        key = state.selected_key
+        if not (isinstance(key, dict) and all(isinstance(key.get(k), str) for k in ("server", "screen"))):
+            state.selected_key = {}
         return state
 
 

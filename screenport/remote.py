@@ -11,7 +11,7 @@ from gi.repository import Gio, GLib
 
 from . import ssh
 from .models import Server
-from .paths import askpass_path, runtime_dir
+from .paths import askpass_path, remove_secret_file, runtime_dir, write_secret_file
 from .settings import Preferences
 
 log = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ def run_remote(
     connexion maîtresse que les terminaux réutiliseront ensuite.
     """
     handle = RemoteHandle()
+    resolved = ssh.resolve_config(server)
     argv = ssh.build_ssh_argv(
         server,
         prefs.ssh_options(),
@@ -67,21 +68,22 @@ def run_remote(
         tty=False,
         runtime_dir=str(runtime_dir()),
         password_prompts=1 if retry == "fail" and secret else None,
+        resolved=resolved,
     )
     if os.environ.get("SCREENPORT_DEBUG"):
         log.warning("ssh: %s", " ".join(argv))
     launcher = Gio.SubprocessLauncher.new(
         Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
     )
-    for key in ("SCREENPORT_SECRET", "SCREENPORT_SECRET_KIND"):
-        launcher.unsetenv(key)
-    env = ssh.askpass_env(askpass_path(), secret, server.secret_kind, retry=retry, force=True)
+    secret_file = write_secret_file(secret) if secret else None
+    env = ssh.askpass_env(askpass_path(), secret_file, server, resolved, retry=retry, force=True)
     for key, value in env.items():
         launcher.setenv(key, value, True)
 
     try:
         proc = launcher.spawnv(argv)
     except GLib.Error as exc:
+        remove_secret_file(secret_file)
         message = exc.message
 
         def report_failure():
@@ -94,6 +96,7 @@ def run_remote(
     handle.proc = proc
 
     def done(proc, result):
+        remove_secret_file(secret_file)
         try:
             _ok, out, err = proc.communicate_finish(result)
         except GLib.Error as exc:

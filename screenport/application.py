@@ -112,6 +112,10 @@ class ScreenPortApp(Adw.Application):
         self.settings: SettingsStore | None = None
         self.store: ServerStore | None = None
         self.vault: Vault | None = None
+        # État partagé par toutes les fenêtres.
+        self.secret_cache: dict[str, str] = {}
+        self.ephemeral: dict = {}
+        self.skipped_sessions: list[dict] = []
         self._restored = False
         self._preferences = None
 
@@ -205,17 +209,49 @@ class ScreenPortApp(Adw.Application):
             state = self.settings.window
             if self.settings.prefs.restore_sessions and state.sessions:
                 entries = list(state.sessions)
-                GLib.idle_add(
-                    lambda: window.restore_sessions(entries, state.selected, state.mosaic) and False
-                )
+                selected_key = dict(state.selected_key)
+                mosaic = state.mosaic
+
+                def restore():
+                    window.restore_sessions(entries, selected_key, mosaic)
+                    return GLib.SOURCE_REMOVE
+
+                GLib.idle_add(restore)
 
     def _on_unix_signal(self):
         """Arrêt demandé par le système : on sauvegarde les onglets d'abord."""
-        for window in self.get_windows():
-            if hasattr(window, "shutdown"):
-                window.shutdown()
+        self.shutdown_all()
         self.quit()
         return GLib.SOURCE_REMOVE
+
+    # ------------------------------------------------------------ fenêtres
+    def main_windows(self) -> list:
+        from .window import MainWindow
+
+        return [w for w in self.get_windows() if isinstance(w, MainWindow)]
+
+    def refresh_servers(self):
+        for window in self.main_windows():
+            window.refresh_servers()
+            window._refresh_tabs()
+
+    def shutdown_all(self):
+        windows = self.main_windows()
+        if windows:
+            windows[0].save_state()
+        for window in windows:
+            window.shutdown(save=False)
+
+    def skip_sessions(self, server_id: str, names: list[str]):
+        for name in names:
+            entry = {"server": server_id, "screen": name}
+            if entry not in self.skipped_sessions:
+                self.skipped_sessions.append(entry)
+
+    def forget_skipped(self, server_id: str):
+        self.skipped_sessions = [e for e in self.skipped_sessions if e["server"] != server_id]
+        for window in self.main_windows():
+            window.schedule_save()
 
     # ---------------------------------------------------------- réglages
     def is_dark(self) -> bool:
@@ -236,9 +272,15 @@ class ScreenPortApp(Adw.Application):
                 window.apply_prefs()
 
     def _cleanup_runtime(self):
-        """Supprime les marqueurs askpass de plus d'un jour."""
+        """Supprime les marqueurs askpass de plus d'un jour et les fichiers de
+        secret abandonnés (arrêt brutal de l'application)."""
         try:
             directory = runtime_dir()
+            for entry in directory.glob("secret-*"):
+                try:
+                    entry.unlink()
+                except OSError:
+                    pass
             limit = time.time() - 86400
             for entry in directory.glob("askpass-*"):
                 try:
@@ -322,11 +364,25 @@ class ScreenPortApp(Adw.Application):
         about.present(self.props.active_window)
 
     def quit_app(self):
-        window = self.props.active_window
-        if window is not None:
-            window.close()
-        else:
+        windows = self.main_windows()
+        count = sum(len(w.panes()) for w in windows)
+
+        def really_quit():
+            self.shutdown_all()
             self.quit()
+
+        if count and self.settings.prefs.confirm_close and windows:
+            from .dialogs import confirm
+
+            restore = self.settings.prefs.restore_sessions
+            body = (
+                f"{count} terminal ouvert. " if count == 1 else f"{count} terminaux ouverts. "
+            ) + "Les screens continueront de tourner sur les serveurs"
+            body += " et seront rouverts au prochain lancement." if restore else "."
+            parent = self.props.active_window or windows[0]
+            confirm(parent, "Quitter ScreenPort ?", body, "Quitter", really_quit, destructive=False)
+        else:
+            really_quit()
 
 
 def main(argv: list[str] | None = None) -> int:

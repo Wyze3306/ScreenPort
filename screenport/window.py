@@ -83,8 +83,9 @@ class MainWindow(Adw.ApplicationWindow):
         super().__init__(application=app, title="ScreenPort")
         self.set_size_request(360, 400)
         self.app = app
-        self.secret_cache: dict[str, str] = {}
-        self.ephemeral: dict[str, Server] = {}
+        # Partagés entre toutes les fenêtres (un onglet peut changer de fenêtre).
+        self.secret_cache: dict[str, str] = app.secret_cache
+        self.ephemeral: dict[str, Server] = app.ephemeral
         self._mosaic = False
         self._focused_pane: TerminalPane | None = None
         self._menu_page: Adw.TabPage | None = None
@@ -94,6 +95,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._force_close = False
         self._closing = False
         self._restoring = False
+        self._restore_entries: list[dict] = []
         self._save_source = 0
 
         state = app.settings.window
@@ -261,12 +263,12 @@ class MainWindow(Adw.ApplicationWindow):
         self.tab_view.set_menu_model(self._tab_menu())
         self.tab_view.connect("close-page", self._on_close_page)
         self.tab_view.connect("notify::selected-page", self._on_selected_page)
-        self.tab_view.connect("page-attached", lambda *_: self._on_pages_changed())
-        self.tab_view.connect("page-detached", lambda *_: self._on_pages_changed())
+        self.tab_view.connect("page-attached", self._on_page_attached)
+        self.tab_view.connect("page-detached", self._on_page_detached)
         self.tab_view.connect("page-reordered", lambda *_: self._on_pages_changed())
         self.tab_view.connect("setup-menu", self._on_setup_menu)
         self.tab_view.connect("indicator-activated", self._on_indicator_activated)
-        self.tab_view.connect("create-window", lambda *_: None)
+        self.tab_view.connect("create-window", self._on_create_window)
 
         self.tab_bar = Adw.TabBar(view=self.tab_view, autohide=False)
         self.tab_bar.set_end_action_widget(
@@ -330,6 +332,7 @@ class MainWindow(Adw.ApplicationWindow):
         section.append("Renommer le screen…", "win.rename-screen")
         section.append("Reconnecter", "win.reconnect")
         section.append("Nouveau screen sur ce serveur…", "win.new-screen")
+        section.append("Déplacer dans une nouvelle fenêtre", "win.move-to-window")
         menu.append_section(None, section)
         section = Gio.Menu()
         section.append("Fermer (le screen continue)", "win.close-tab")
@@ -373,6 +376,7 @@ class MainWindow(Adw.ApplicationWindow):
             "reconnect": lambda: self._target_pane() and self._target_pane().reconnect(),
             "rename-screen": lambda: self.rename_screen(self._target_pane()),
             "kill-screen": lambda: self.kill_screen(self._target_pane()),
+            "move-to-window": lambda: self.move_to_new_window(self._target_pane()),
             "toggle-sidebar": lambda: self.split.set_show_sidebar(not self.split.get_show_sidebar()),
             "fullscreen": lambda: self.unfullscreen() if self.is_fullscreen() else self.fullscreen(),
             "copy": lambda: self._current_call("copy"),
@@ -408,7 +412,13 @@ class MainWindow(Adw.ApplicationWindow):
         self.mosaic_action.connect("change-state", lambda a, v: self.set_mosaic(v.get_boolean()))
         self.add_action(self.mosaic_action)
 
-        self._pane_actions = ["close-tab", "reconnect", "rename-screen", "kill-screen", "copy", "paste"]
+        forget = Gio.SimpleAction.new("forget-skipped", GLib.VariantType.new("s"))
+        forget.connect("activate", lambda _a, p: self.app.forget_skipped(p.get_string()))
+        self.add_action(forget)
+
+        self._pane_actions = [
+            "close-tab", "reconnect", "rename-screen", "kill-screen", "move-to-window", "copy", "paste",
+        ]
 
     def _current_call(self, method: str):
         pane = self.current_pane()
@@ -473,6 +483,13 @@ class MainWindow(Adw.ApplicationWindow):
 
     def with_secret(self, server: Server, callback, cancelled=None):
         """Récupère le secret d'un serveur (cache, trousseau ou saisie)."""
+        errors = server.validate()
+        if errors:
+            # Profil invalide (fichier modifié à la main...) : on ne lance rien.
+            self.toast(f"{server.display_name} : {errors[0]}")
+            if cancelled:
+                cancelled()
+            return
         kind = server.secret_kind
         if kind is None:
             callback(None)
@@ -498,13 +515,22 @@ class MainWindow(Adw.ApplicationWindow):
 
         ask_password(self, server, got)
 
+    def _store_secret(self, server: Server, secret: str) -> bool:
+        ok = self.app.vault.set(server.id, server.secret_kind, secret, f"ScreenPort — {server.target}")
+        if not ok:
+            self.toast("Le trousseau a refusé l'enregistrement : secret gardé en mémoire pour cette session")
+        return ok
+
     def remember_secret(self, server: Server, secret: str, remember: bool):
         self.secret_cache[server.id] = secret
         stored = self.app.store.get(server.id)
         if stored is None or not server.secret_kind:
             return
         if remember:
-            self.app.vault.set(server.id, server.secret_kind, secret, f"ScreenPort — {server.target}")
+            self._store_secret(server, secret)
+        else:
+            # Ne pas laisser traîner un ancien secret (éventuellement refusé).
+            self.app.vault.delete(server.id, server.secret_kind)
         if stored.remember_secret != remember:
             stored.remember_secret = remember
             self.app.store.upsert(stored)
@@ -534,6 +560,7 @@ class MainWindow(Adw.ApplicationWindow):
         kind = server.secret_kind
         self.ephemeral.pop(server.id, None)
         self.app.store.upsert(server)
+        ssh.clear_resolved_cache()
         for other in ("password", "passphrase"):
             if other != kind:
                 self.app.vault.delete(server.id, other)
@@ -541,7 +568,7 @@ class MainWindow(Adw.ApplicationWindow):
             if secret:
                 self.secret_cache[server.id] = secret
                 if server.remember_secret:
-                    self.app.vault.set(server.id, kind, secret, f"ScreenPort — {server.target}")
+                    self._store_secret(server, secret)
                 else:
                     self.app.vault.delete(server.id, kind)
             else:
@@ -549,13 +576,13 @@ class MainWindow(Adw.ApplicationWindow):
                 self.app.vault.delete(server.id, kind)
         else:
             self.secret_cache.pop(server.id, None)
-        for pane in self.panes():
-            if pane.server.id == server.id:
-                pane.server = server
-                pane.secret = self.secret_cache.get(server.id)
-                pane.update_labels()
-        self.refresh_servers()
-        self._refresh_tabs()
+        for window in self.app.main_windows():
+            for pane in window.panes():
+                if pane.server.id == server.id:
+                    pane.server = server
+                    pane.secret = self.secret_cache.get(server.id)
+                    pane.update_labels()
+        self.app.refresh_servers()
         self.toast(f"Serveur « {server.display_name} » enregistré")
 
     def duplicate_server(self, server_id: str):
@@ -567,8 +594,8 @@ class MainWindow(Adw.ApplicationWindow):
         if server.secret_kind:
             secret = self.app.vault.get(server.id, server.secret_kind)
             if secret:
-                self.app.vault.set(copy.id, copy.secret_kind, secret, f"ScreenPort — {copy.target}")
-        self.refresh_servers()
+                self._store_secret(copy, secret)
+        self.app.refresh_servers()
         self.edit_server(copy.id)
 
     def delete_server(self, server_id: str):
@@ -580,7 +607,7 @@ class MainWindow(Adw.ApplicationWindow):
             self.app.store.remove(server.id)
             self.app.vault.delete(server.id)
             self.secret_cache.pop(server.id, None)
-            self.refresh_servers()
+            self.app.refresh_servers()
             self.toast(f"Serveur « {server.display_name} » supprimé")
 
         confirm(
@@ -681,7 +708,7 @@ class MainWindow(Adw.ApplicationWindow):
             if done:
                 done()
             return
-        toast = Adw.Toast(title=f"Connexion à {server.display_name}…", timeout=0)
+        toast = Adw.Toast(title=GLib.markup_escape_text(f"Connexion à {server.display_name}…"), timeout=0)
         self.toasts.add_toast(toast)
 
         def ready(result: remote.RemoteResult, _listing):
@@ -717,11 +744,6 @@ class MainWindow(Adw.ApplicationWindow):
         pane.page = self.tab_view.append(slot)
         pane.page.set_icon(self._color_icon(server.color))
         pane.page.set_indicator_tooltip("Déconnecté — cliquer pour se reconnecter")
-        pane.connect("state-changed", self._on_pane_state)
-        pane.connect("close-request", lambda p: self._close_pane(p))
-        pane.connect("focus-in", self._on_pane_focus)
-        pane.connect("maximize-request", self._on_pane_maximize)
-        pane.connect("bell", self._on_pane_bell)
         self._refresh_tabs()
         if self._mosaic:
             self._rebuild_mosaic()
@@ -799,6 +821,54 @@ class MainWindow(Adw.ApplicationWindow):
             pane.page.set_icon(self._color_icon(pane.server.color))
         self._update_title()
 
+    def _on_page_attached(self, _view, page, _position):
+        slot = page.get_child()
+        if isinstance(slot, PaneSlot):
+            pane = slot.pane
+            pane.page = page
+            # Les signaux sont reliés à la fenêtre qui contient l'onglet : un
+            # onglet déplacé vers une autre fenêtre change de propriétaire.
+            pane.window_handlers = [
+                pane.connect("state-changed", self._on_pane_state),
+                pane.connect("close-request", self._close_pane),
+                pane.connect("focus-in", self._on_pane_focus),
+                pane.connect("maximize-request", self._on_pane_maximize),
+                pane.connect("bell", self._on_pane_bell),
+            ]
+            pane.update_labels()
+            self._on_pane_state(pane)
+        self._on_pages_changed()
+
+    def _on_page_detached(self, _view, page, _position):
+        slot = page.get_child()
+        if isinstance(slot, PaneSlot):
+            pane = slot.pane
+            for handler in getattr(pane, "window_handlers", []):
+                pane.disconnect(handler)
+            pane.window_handlers = []
+            if self._focused_pane is pane:
+                self._focused_pane = None
+            # Onglet emporté depuis la mosaïque : on remet le terminal dans son onglet.
+            parent = pane.get_parent()
+            if parent is not None and parent is not slot:
+                parent.remove(pane)
+                pane.set_mosaic(False)
+                slot.set_child(pane)
+        self._on_pages_changed()
+
+    def _on_create_window(self, _view):
+        """Onglet glissé hors de la fenêtre : il part dans une nouvelle fenêtre."""
+        window = MainWindow(self.app)
+        window.present()
+        return window.tab_view
+
+    def move_to_new_window(self, pane: TerminalPane | None):
+        if pane is None:
+            return
+        window = MainWindow(self.app)
+        window.present()
+        self.tab_view.transfer_page(pane.page, window.tab_view, 0)
+
     def _on_pages_changed(self):
         panes = self.panes()
         has_panes = bool(panes)
@@ -829,11 +899,15 @@ class MainWindow(Adw.ApplicationWindow):
         self._save_source = GLib.timeout_add(800, save)
 
     def _update_counts(self):
+        # Compteur global : un onglet déplacé dans une autre fenêtre compte toujours.
         counts: dict[str, int] = {}
-        for pane in self.panes():
-            counts[pane.server.id] = counts.get(pane.server.id, 0) + 1
-        for server_id, row in self._server_rows.items():
-            row.set_count(counts.get(server_id, 0))
+        windows = self.app.main_windows() or [self]
+        for window in windows:
+            for pane in window.panes():
+                counts[pane.server.id] = counts.get(pane.server.id, 0) + 1
+        for window in windows:
+            for server_id, row in window._server_rows.items():
+                row.set_count(counts.get(server_id, 0))
 
     def _update_title(self):
         pane = self.current_pane()
@@ -932,7 +1006,9 @@ class MainWindow(Adw.ApplicationWindow):
         if self._close_toast is not None:
             self._close_toast.dismiss()
         toast = Adw.Toast(
-            title=f"« {pane.title} » fermé · le screen continue sur {pane.server.display_name}",
+            title=GLib.markup_escape_text(
+                f"« {pane.title} » fermé · le screen continue sur {pane.server.display_name}"
+            ),
             button_label="Rouvrir",
             action_name="win.reopen",
             action_target=GLib.Variant("(ss)", (pane.server.id, pane.screen_name)),
@@ -1079,8 +1155,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(message), timeout=timeout))
 
     # ===================================================== restauration
-    def restore_sessions(self, entries: list[dict], selected: int = 0, mosaic: bool = False):
+    def restore_sessions(self, entries: list[dict], selected_key: dict | None = None, mosaic: bool = False):
         self._restoring = True
+        self._restore_entries = [dict(e) for e in entries]
         groups: OrderedDict[str, list[str]] = OrderedDict()
         for entry in entries:
             groups.setdefault(entry["server"], [])
@@ -1089,13 +1166,40 @@ class MainWindow(Adw.ApplicationWindow):
 
         def finish():
             self._restoring = False
-            panes = self.panes()
-            if panes:
-                index = max(0, min(selected, len(panes) - 1))
-                self.tab_view.set_selected_page(panes[index].page)
-                if mosaic and len(panes) > 1:
-                    self.set_mosaic(True)
+            self._restore_entries = []
+            # Les onglets ont été ouverts serveur par serveur : on rétablit
+            # l'ordre d'origine puis l'onglet qui était sélectionné.
+            ordered = [self._find_pane(e["server"], e["screen"]) for e in entries]
+            ordered = [p for p in ordered if p is not None]
+            for position, pane in enumerate(ordered):
+                self.tab_view.reorder_page(pane.page, position)
+            target = None
+            if selected_key:
+                target = self._find_pane(selected_key.get("server", ""), selected_key.get("screen", ""))
+            if target is None and ordered:
+                target = ordered[0]
+            if target is not None:
+                self.tab_view.set_selected_page(target.page)
+            if mosaic and len(self.panes()) > 1:
+                self.set_mosaic(True)
             self.schedule_save()
+
+        def skip(server: Server, names: list[str]):
+            # Mot de passe refusé/annulé : ces onglets restent mémorisés pour
+            # le prochain lancement, sauf si l'utilisateur demande de les oublier.
+            self.app.skip_sessions(server.id, names)
+            self.toasts.add_toast(
+                Adw.Toast(
+                    title=GLib.markup_escape_text(
+                        f"Onglets de « {server.display_name} » non rouverts"
+                    ),
+                    button_label="Oublier",
+                    action_name="win.forget-skipped",
+                    action_target=GLib.Variant.new_string(server.id),
+                    timeout=8,
+                )
+            )
+            next_server()
 
         def next_server():
             while groups:
@@ -1106,7 +1210,7 @@ class MainWindow(Adw.ApplicationWindow):
                 self.with_secret(
                     server,
                     lambda secret, s=server, n=names: self.connect_and_open(s, n, secret, done=next_server),
-                    cancelled=next_server,
+                    cancelled=lambda s=server, n=names: skip(s, n),
                 )
                 return
             finish()
@@ -1114,6 +1218,7 @@ class MainWindow(Adw.ApplicationWindow):
         next_server()
 
     def save_state(self):
+        """Mémorise la fenêtre et les onglets de toutes les fenêtres ouvertes."""
         state = self.app.settings.window
         if not self.is_maximized() and not self.is_fullscreen():
             width, height = self.get_default_size()
@@ -1121,23 +1226,38 @@ class MainWindow(Adw.ApplicationWindow):
         state.maximized = self.is_maximized()
         state.sidebar_visible = self.split.get_show_sidebar()
         state.mosaic = self._mosaic
-        sessions = []
         current = self.current_pane()
-        state.selected = 0
-        for pane in self.panes():
-            if self.app.store.get(pane.server.id) is None:
+        state.selected_key = (
+            {"server": current.server.id, "screen": current.screen_name} if current else {}
+        )
+        sessions: list[dict] = []
+        restoring = False
+        for window in [self, *(w for w in self.app.main_windows() if w is not self)]:
+            if window._closing and window is not self:
                 continue
-            if pane is current:
-                state.selected = len(sessions)
-            sessions.append({"server": pane.server.id, "screen": pane.screen_name})
+            if window._restoring:
+                # Restauration en cours (mot de passe demandé...) : on garde la
+                # liste complète prévue plutôt que les seuls onglets déjà ouverts.
+                restoring = True
+                sessions += [e for e in window._restore_entries if e not in sessions]
+            for pane in window.panes():
+                entry = {"server": pane.server.id, "screen": pane.screen_name}
+                if self.app.store.get(pane.server.id) is not None and entry not in sessions:
+                    sessions.append(entry)
+        for entry in self.app.skipped_sessions:
+            if entry not in sessions:
+                sessions.append(entry)
+        if restoring and not current:
+            state.selected_key = {}
         state.sessions = sessions
         self.app.settings.save()
 
     def _on_close_request(self, *_):
         panes = self.panes()
+        others = [w for w in self.app.main_windows() if w is not self and not w._closing]
         if panes and self.app.settings.prefs.confirm_close and not self._force_close:
             count = len(panes)
-            restore = self.app.settings.prefs.restore_sessions
+            restore = self.app.settings.prefs.restore_sessions and not others
             body = (
                 f"{count} terminal ouvert. " if count == 1 else f"{count} terminaux ouverts. "
             ) + "Les screens continueront de tourner sur les serveurs"
@@ -1147,16 +1267,23 @@ class MainWindow(Adw.ApplicationWindow):
                 self._force_close = True
                 self.close()
 
-            confirm(self, "Fermer ScreenPort ?", body, "Fermer", really_close, destructive=False)
+            heading = "Fermer cette fenêtre ?" if others else "Fermer ScreenPort ?"
+            confirm(self, heading, body, "Fermer", really_close, destructive=False)
             return True
-        self.shutdown()
+        if others:
+            # Une autre fenêtre reste ouverte : elle mémorisera l'état.
+            self.shutdown(save=False)
+            others[0].schedule_save()
+        else:
+            self.shutdown()
         return False
 
-    def shutdown(self):
+    def shutdown(self, save: bool = True):
         """Sauvegarde l'état puis ferme proprement les connexions."""
         if self._closing:
             return
-        self.save_state()
+        if save:
+            self.save_state()
         self._closing = True
         self._force_close = True
         if self._save_source:
@@ -1164,4 +1291,3 @@ class MainWindow(Adw.ApplicationWindow):
             self._save_source = 0
         for pane in self.panes():
             pane.close()
-

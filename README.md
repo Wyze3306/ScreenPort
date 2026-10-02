@@ -31,7 +31,8 @@ un redémarrage de votre PC).
   Les secrets sont rangés dans le **trousseau du système** (GNOME Keyring, KWallet…).
 - **Ouverture groupée** : la fenêtre « Ouvrir des screens » liste les screens existants
   (attachés/détachés, date de création) et permet d'en créer plusieurs d'un coup.
-- **Onglets** colorés par serveur, et **vue mosaïque** pour voir tous les terminaux côte à côte.
+- **Onglets** colorés par serveur, **vue mosaïque** pour voir tous les terminaux côte à côte,
+  et plusieurs fenêtres (glissez un onglet hors de la fenêtre).
 - **Gestion des screens** : renommer, terminer, rouvrir un onglet fermé.
 - **Une seule authentification par serveur** : les terminaux suivants réutilisent la
   connexion SSH (multiplexage) et s'ouvrent instantanément.
@@ -118,11 +119,16 @@ Astuce screen : `Ctrl+a d` détache le screen, `Ctrl+a Échap` permet de remonte
   `screen -d -r` (ou `screen -x` en mode partagé) si elle existe, sinon `screen -S nom`.
 - Les noms de screen sont limités à `A-Z a-z 0-9 - _` (les espaces deviennent des tirets),
   ce qui évite tout problème d'échappement côté serveur.
-- Le mot de passe est transmis à `ssh` via un programme `SSH_ASKPASS` interne, jamais
-  écrit sur le disque en clair ni passé en argument. Les nouvelles clés d'hôte sont
-  acceptées à la première connexion (`accept-new`) ; une clé **modifiée** est toujours refusée.
+- Le mot de passe (ou la phrase de passe) est remis à `ssh` par un programme `SSH_ASKPASS`
+  interne : jamais en argument ni dans l'environnement, mais via un fichier privé éphémère
+  (permissions 600, dans `$XDG_RUNTIME_DIR`) supprimé dès que la connexion est établie.
+  Il n'est donné qu'à l'invite exacte de `ssh` pour ce serveur et cet utilisateur (ou cette
+  clé) : jamais à une question posée par le serveur, ni à un hôte de rebond (ProxyJump).
+- Les nouvelles clés d'hôte sont acceptées à la première connexion (`accept-new`) ; une clé
+  **modifiée** est toujours refusée. Un `StrictHostKeyChecking` défini dans `~/.ssh/config`
+  est respecté.
 - Configuration : `~/.config/screenport/` (`servers.json`, `settings.json`). Si aucun
-  trousseau n'est disponible, les secrets vont dans `secrets.json` (permissions 600).
+  trousseau n'est disponible au démarrage, les secrets vont dans `secrets.json` (permissions 600).
 
 ## Licence
 

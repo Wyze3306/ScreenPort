@@ -6,13 +6,12 @@ import logging
 import os
 import random
 import signal
-import time
 
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, Vte
 
 from . import palettes, ssh
 from .models import Server
-from .paths import askpass_path, runtime_dir
+from .paths import askpass_path, remove_secret_file, runtime_dir, write_secret_file
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +25,13 @@ _ZOOM_STEPS = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5, 1.7, 2.0, 2.4,
 # PCRE2_UTF | PCRE2_NO_UTF_CHECK | PCRE2_UCP | PCRE2_MULTILINE
 _PCRE2_FLAGS = 0x00080000 | 0x40000000 | 0x00020000 | 0x00000400
 _URL_REGEX = r"(?:https?|ftp)://[\w\-.~:/?#\[\]@!$&*+,;=%]+[\w\-~/#=&%]"
+
+
+def _hangup(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGHUP)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 def _rgba(value: str) -> Gdk.RGBA:
@@ -53,11 +59,14 @@ class TerminalPane(Gtk.Box):
         self.secret = secret
         self.state = CONNECTING
         self.child_pid: int | None = None
-        self.spawned_at = 0.0
         self.reconnect_attempts = 0
         self._reconnect_source = 0
         self._countdown = 0
         self._closing = False
+        self.established = False
+        self._spawn_row = 0
+        self._secret_file: str | None = None
+        self._secret_timeout = 0
         self._zoom_index = _ZOOM_STEPS.index(1.0)
         self.add_css_class("terminal-pane")
 
@@ -122,6 +131,7 @@ class TerminalPane(Gtk.Box):
 
         self.terminal.connect("child-exited", self._on_child_exited)
         self.terminal.connect("contents-changed", self._on_contents_changed)
+        self.terminal.connect("window-title-changed", self._on_title_changed)
         self.terminal.connect("bell", lambda *_: self.emit("bell"))
         self.terminal.connect("selection-changed", self._on_selection_changed)
 
@@ -276,26 +286,37 @@ class TerminalPane(Gtk.Box):
     # ---------------------------------------------------------- connexion
     def connect_session(self):
         self._cancel_reconnect()
+        self._remove_secret_file()
         self.banner.set_reveal_child(False)
         prefs = self.app.settings.prefs
         remote_command = ssh.remote_attach_command(
             self.screen_name, prefs.attach_mode, prefs.screen_history
         )
+        resolved = ssh.resolve_config(self.server)
         argv = ssh.build_ssh_argv(
             self.server,
             prefs.ssh_options(),
             remote_command=remote_command,
             tty=True,
             runtime_dir=str(runtime_dir()),
+            resolved=resolved,
         )
         if os.environ.get("SCREENPORT_DEBUG"):
             log.warning("ssh: %s", " ".join(argv))
+        if self.secret:
+            self._secret_file = write_secret_file(self.secret)
+            # Filet de sécurité si la session n'aboutit jamais.
+            self._secret_timeout = GLib.timeout_add_seconds(120, self._on_secret_timeout)
         env = ssh.askpass_env(
-            askpass_path(), self.secret, self.server.secret_kind, retry="gui", force=bool(self.secret)
+            askpass_path(), self._secret_file, self.server, resolved, retry="gui", force=bool(self.secret)
         )
         envv = [f"{k}={v}" for k, v in env.items()]
+        self.established = False
+        # Titre remis à zéro : VTE ne signale un titre que s'il change, et le
+        # marqueur de connexion établie doit être détecté à chaque connexion.
+        self.terminal.feed(b"\x1b]0;\x07")
+        self._spawn_row = self.terminal.get_cursor_position()[1]
         self._set_state(CONNECTING)
-        self.spawned_at = time.monotonic()
         common = (Vte.PtyFlags.DEFAULT, GLib.get_home_dir(), argv, envv, GLib.SpawnFlags.SEARCH_PATH)
         try:
             # Signature de PyGObject ≤ 3.50 : child_setup, child_setup_data, timeout...
@@ -305,6 +326,9 @@ class TerminalPane(Gtk.Box):
 
     def _on_spawned(self, _terminal, pid, error, *_args):
         if error is not None or pid in (None, -1):
+            self._remove_secret_file()
+            if self._closing:
+                return
             message = error.message if error is not None else "erreur inconnue"
             self._set_state(CLOSED)
             self._show_banner(
@@ -313,23 +337,51 @@ class TerminalPane(Gtk.Box):
                 f"{message}\nVérifiez que le paquet « openssh-client » est installé.",
             )
             return
+        if self._closing:
+            # Onglet fermé pendant le lancement : on n'abandonne pas ssh.
+            _hangup(pid)
+            return
         self.child_pid = pid
 
     def _on_contents_changed(self, *_):
         if self.state == CONNECTING and self.child_pid:
             self._set_state(CONNECTED)
 
+    def _on_title_changed(self, *_):
+        try:
+            title = self.terminal.get_window_title() or ""
+        except Exception:  # pragma: no cover - API dépréciée dans VTE ≥ 0.78
+            return
+        if title == ssh.READY_TITLE and not self.established:
+            # Le script distant s'exécute : la connexion est authentifiée.
+            self.established = True
+            self.reconnect_attempts = 0
+            self._remove_secret_file()
+            self._set_state(CONNECTED)
+
+    def _on_secret_timeout(self):
+        self._secret_timeout = 0
+        self._remove_secret_file()
+        return GLib.SOURCE_REMOVE
+
+    def _remove_secret_file(self):
+        if self._secret_timeout:
+            GLib.source_remove(self._secret_timeout)
+            self._secret_timeout = 0
+        remove_secret_file(self._secret_file)
+        self._secret_file = None
+
     def _on_child_exited(self, _terminal, status):
         self.child_pid = None
+        self._remove_secret_file()
         if self._closing:
             return
         try:
             code = os.waitstatus_to_exitcode(status)
         except ValueError:
             code = status
-        duration = time.monotonic() - self.spawned_at
         self._set_state(CLOSED)
-        tail = self._tail_text()
+        tail = self._text_since_spawn()
         auto = False
         if code == 0:
             self.reconnect_attempts = 0
@@ -343,15 +395,21 @@ class TerminalPane(Gtk.Box):
                 title = "Session terminée"
                 detail = "La connexion a été fermée normalement."
             icon = "emblem-ok-symbolic"
-        elif code == 255:
-            if duration > 10:
-                self.reconnect_attempts = 0
-            lost = duration > 10 or self.reconnect_attempts > 0
-            error = ssh.humanize_ssh_error(tail, code)
-            title = "Connexion perdue" if lost else error.title
-            detail = error.detail if not lost else "La connexion SSH a été interrompue."
+        elif code == 255 and self.established:
+            # Coupure d'une session qui fonctionnait : on retente.
+            title = "Connexion perdue"
+            detail = "La connexion SSH a été interrompue."
             icon = "network-offline-symbolic"
-            auto = self.app.settings.prefs.auto_reconnect and lost and not error.auth_failed
+            auto = self.app.settings.prefs.auto_reconnect
+        elif code == 255:
+            error = ssh.humanize_ssh_error(tail, code)
+            retrying = self.reconnect_attempts > 0
+            title = "Reconnexion impossible" if retrying else error.title
+            detail = f"{error.title} : {error.detail}" if retrying else error.detail
+            icon = "network-offline-symbolic"
+            # Une première connexion ratée n'est pas retentée automatiquement ;
+            # une série de reconnexions continue jusqu'à la limite d'essais.
+            auto = self.app.settings.prefs.auto_reconnect and retrying and not error.auth_failed
         else:
             title = "Session terminée"
             detail = f"ssh s'est arrêté avec le code {code}."
@@ -360,14 +418,16 @@ class TerminalPane(Gtk.Box):
         if auto:
             self._schedule_reconnect()
 
-    def _tail_text(self) -> str:
+    def _text_since_spawn(self) -> str:
+        """Texte affiché depuis le lancement de ssh (pas le contenu du screen)."""
+        text = ""
         try:
-            text = self.terminal.get_text_format(Vte.Format.TEXT)
+            end_row = self.terminal.get_cursor_position()[1]
+            text, _length = self.terminal.get_text_range_format(
+                Vte.Format.TEXT, self._spawn_row, 0, end_row, self.terminal.get_column_count()
+            )
         except Exception:  # pragma: no cover - selon la version de VTE
-            try:
-                text = self.terminal.get_text(None, None)[0]
-            except Exception:
-                text = ""
+            text = ""
         lines = [line for line in (text or "").splitlines() if line.strip()]
         return "\n".join(lines[-12:])
 
@@ -434,11 +494,9 @@ class TerminalPane(Gtk.Box):
         """Ferme le terminal : ssh est arrêté, le screen se détache tout seul."""
         self._closing = True
         self._cancel_reconnect()
+        self._remove_secret_file()
         if self.child_pid:
-            try:
-                os.kill(self.child_pid, signal.SIGHUP)
-            except ProcessLookupError:
-                pass
+            _hangup(self.child_pid)
             self.child_pid = None
 
     # --------------------------------------------------------- édition

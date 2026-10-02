@@ -3,9 +3,11 @@
 ssh l'exécute avec le texte de la question en argument et lit la réponse
 sur la sortie standard.
 
-* Si l'application a fourni un secret (mot de passe ou phrase de passe) et que
-  la question y correspond, le secret est renvoyé directement — une seule
-  fois par processus ssh, pour ne jamais boucler sur un mot de passe refusé.
+* Si l'application a fourni un secret (fichier 600 éphémère dont le chemin
+  est dans ``SCREENPORT_SECRET_FILE``), il n'est renvoyé que pour l'invite
+  locale exacte de ssh correspondant au serveur et à la clé attendus — jamais
+  pour une question choisie par le serveur ni pour un hôte de rebond — et une
+  seule fois par processus ssh, pour ne pas boucler sur un secret refusé.
 * Sinon (code de vérification, confirmation d'empreinte, secret refusé...),
   une petite fenêtre demande la réponse à l'utilisateur.
 """
@@ -17,10 +19,6 @@ import re
 import sys
 from pathlib import Path
 
-_SECRET_PATTERNS = {
-    "password": re.compile(r"password|mot de passe|passwort|contrase|senha", re.I),
-    "passphrase": re.compile(r"passphrase|phrase de passe", re.I),
-}
 _CONFIRM = re.compile(r"\(yes/no", re.I)
 
 
@@ -58,6 +56,17 @@ def _first_use(kind: str) -> bool:
     return True
 
 
+def _read_secret() -> str:
+    path = os.environ.get("SCREENPORT_SECRET_FILE", "")
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
 def _answer(text: str) -> int:
     sys.stdout.write(text + "\n")
     sys.stdout.flush()
@@ -65,16 +74,24 @@ def _answer(text: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .ssh import secret_prompt_matches
+
     argv = sys.argv if argv is None else argv
     prompt = argv[1] if len(argv) > 1 else ""
-    secret = os.environ.get("SCREENPORT_SECRET", "")
     kind = os.environ.get("SCREENPORT_SECRET_KIND", "password")
     retry = os.environ.get("SCREENPORT_ASKPASS_RETRY", "gui")
     confirm = bool(_CONFIRM.search(prompt))
 
     note = ""
-    pattern = _SECRET_PATTERNS.get(kind)
-    if secret and not confirm and pattern and pattern.search(prompt):
+    expected = not confirm and secret_prompt_matches(
+        prompt,
+        kind,
+        os.environ.get("SCREENPORT_EXPECT_USER", ""),
+        os.environ.get("SCREENPORT_EXPECT_HOSTS", "").split(),
+        os.environ.get("SCREENPORT_EXPECT_KEY", ""),
+    )
+    secret = _read_secret() if expected else ""
+    if secret:
         if _first_use(kind):
             return _answer(secret)
         if retry == "fail":

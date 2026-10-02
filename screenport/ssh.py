@@ -13,9 +13,11 @@ contiennent que ``[A-Za-z0-9_-]``.
 from __future__ import annotations
 
 import datetime
+import getpass
 import os
 import re
 import shlex
+import subprocess
 from dataclasses import dataclass, field
 
 from .models import AUTH_KEY, AUTH_PASSWORD, Server, is_valid_screen_name
@@ -23,6 +25,11 @@ from .models import AUTH_KEY, AUTH_PASSWORD, Server, is_valid_screen_name
 ATTACH_DETACH = "detach"  # screen -d -r : reprend la session, détache les autres
 ATTACH_SHARE = "share"  # screen -x : multi-affichage, partage la session
 SHELL_ONLY = "@shell"  # pas de screen : simple shell de connexion
+
+# Titre de fenêtre émis par le serveur dès que la session est ouverte : il
+# prouve que l'authentification a réussi (cf. TerminalPane).
+READY_TITLE = "screenport-ready"
+_READY = 'printf "\\033]0;%s\\007" ' + READY_TITLE
 
 _BEGIN = "__SCREENPORT_BEGIN__"
 _END = "__SCREENPORT_END__"
@@ -62,6 +69,7 @@ def remote_attach_command(name: str, mode: str = ATTACH_DETACH, history: int = 1
         'n="$1"',
         'mode="$2"',
         'hist="$3"',
+        _READY,
         "if command -v screen >/dev/null 2>&1; then :",
         "else printf \"\\r\\n\\033[1;33m[ScreenPort]\\033[0m GNU screen est introuvable sur ce serveur.\\r\\n\"",
         'printf "Installez-le (par exemple : sudo apt install screen). Ouverture d un shell standard.\\r\\n\\r\\n"',
@@ -79,7 +87,7 @@ def remote_attach_command(name: str, mode: str = ATTACH_DETACH, history: int = 1
 
 
 def remote_shell_command() -> str:
-    return _sh(['exec "${SHELL:-/bin/sh}" -l'])
+    return _sh([_READY, 'exec "${SHELL:-/bin/sh}" -l'])
 
 
 def remote_list_command() -> str:
@@ -253,6 +261,67 @@ def control_path(runtime_dir: str) -> str:
     return os.path.join(runtime_dir, "cm-%C")
 
 
+def _port_args(server: Server) -> list[str]:
+    # Port par défaut : on laisse ~/.ssh/config décider (Port d'un « Host *.lan »...).
+    port = int(server.port or 22)
+    return [] if port == 22 else ["-p", str(port)]
+
+
+@dataclass(frozen=True)
+class ResolvedConfig:
+    """Ce que ssh fera réellement pour un serveur, d'après ``ssh -G``."""
+
+    user: str
+    hosts: tuple[str, ...]  # noms d'hôte tels qu'affichés dans les invites de ssh
+    strict_host_key_checking: str = "ask"
+
+
+_RESOLVED: dict[tuple[str, int], ResolvedConfig] = {}
+
+
+def parse_ssh_g(output: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in (output or "").splitlines():
+        key, _, value = line.strip().partition(" ")
+        if key and key.lower() not in values:
+            values[key.lower()] = value.strip()
+    return values
+
+
+def resolve_config(server: Server, timeout: float = 3.0) -> ResolvedConfig:
+    """Interroge ``ssh -G`` (sans connexion) pour connaître l'utilisateur et
+    l'hôte effectifs, en tenant compte de ~/.ssh/config. Résultat mis en cache."""
+    key = (server.ssh_host, int(server.port or 22))
+    if key in _RESOLVED:
+        return _RESOLVED[key]
+    try:
+        result = subprocess.run(
+            ["ssh", "-G", *_port_args(server), "--", server.ssh_host],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        values = parse_ssh_g(result.stdout) if result.returncode == 0 else {}
+    except (OSError, subprocess.SubprocessError):
+        values = {}
+    if values.get("hostname"):
+        hosts = tuple(h for h in (values.get("hostname"), values.get("hostkeyalias")) if h)
+    else:
+        hosts = (server.host,)
+    resolved = ResolvedConfig(
+        user=values.get("user") or server.user or getpass.getuser(),
+        hosts=hosts,
+        strict_host_key_checking=values.get("stricthostkeychecking", "ask").lower(),
+    )
+    _RESOLVED[key] = resolved
+    return resolved
+
+
+def clear_resolved_cache() -> None:
+    _RESOLVED.clear()
+
+
 def build_ssh_argv(
     server: Server,
     options: SshOptions,
@@ -262,25 +331,27 @@ def build_ssh_argv(
     runtime_dir: str | None = None,
     multiplex: bool | None = None,
     password_prompts: int | None = None,
+    resolved: ResolvedConfig | None = None,
 ) -> list[str]:
     """Ligne de commande ssh complète pour ``server``.
 
     ``password_prompts`` limite le nombre de tentatives de mot de passe
     (1 pour échouer vite quand le secret enregistré est refusé).
+    ``resolved`` (cf. :func:`resolve_config`) évite d'affaiblir un
+    « StrictHostKeyChecking yes » défini par l'utilisateur.
     """
     argv = ["ssh", "-t" if tty else "-T"]
     if not tty:
         argv.append("-n")
-    argv += ["-p", str(int(server.port or 22))]
+    argv += _port_args(server)
 
     opts: list[tuple[str, str]] = [
         ("LogLevel", "ERROR"),
         ("ConnectTimeout", str(int(options.connect_timeout))),
-        (
-            "StrictHostKeyChecking",
-            "accept-new" if options.accept_new_hostkeys else "ask",
-        ),
     ]
+    user_strict = resolved.strict_host_key_checking if resolved else "ask"
+    if options.accept_new_hostkeys and user_strict == "ask":
+        opts.append(("StrictHostKeyChecking", "accept-new"))
     if options.keepalive and options.keepalive > 0:
         opts += [
             ("ServerAliveInterval", str(int(options.keepalive))),
@@ -315,8 +386,7 @@ def build_control_exit_argv(server: Server, runtime_dir: str) -> list[str]:
     """Ferme la connexion maîtresse partagée d'un serveur."""
     return [
         "ssh",
-        "-p",
-        str(int(server.port or 22)),
+        *_port_args(server),
         "-o",
         f"ControlPath={control_path(runtime_dir)}",
         "-O",
@@ -328,27 +398,65 @@ def build_control_exit_argv(server: Server, runtime_dir: str) -> list[str]:
 
 def askpass_env(
     askpass: str,
-    secret: str | None,
-    kind: str | None,
+    secret_file: str | None,
+    server: Server | None = None,
+    resolved: ResolvedConfig | None = None,
     *,
     retry: str = "gui",
     force: bool = True,
 ) -> dict[str, str]:
     """Variables d'environnement pour que ssh utilise notre askpass.
 
-    ``retry`` : comportement si le secret enregistré est refusé
-    (``gui`` : demander à l'utilisateur, ``fail`` : abandonner).
+    Le secret n'est jamais placé dans l'environnement : askpass le lit dans
+    ``secret_file`` (fichier 600 éphémère) et ne le donne qu'aux invites
+    locales de ssh correspondant exactement au serveur attendu.
+    ``retry`` : comportement si le secret est refusé (``gui`` : demander à
+    l'utilisateur, ``fail`` : abandonner).
     """
     env: dict[str, str] = {}
-    if not force and not secret:
+    if not force and not secret_file:
         return env
     env["SSH_ASKPASS"] = askpass
     env["SSH_ASKPASS_REQUIRE"] = "force"
     env["SCREENPORT_ASKPASS_RETRY"] = retry
-    if secret:
-        env["SCREENPORT_SECRET"] = secret
-        env["SCREENPORT_SECRET_KIND"] = kind or "password"
+    if secret_file and server is not None and server.secret_kind:
+        resolved = resolved or ResolvedConfig(user=server.user, hosts=(server.host,))
+        env["SCREENPORT_SECRET_FILE"] = secret_file
+        env["SCREENPORT_SECRET_KIND"] = server.secret_kind
+        env["SCREENPORT_EXPECT_USER"] = resolved.user
+        env["SCREENPORT_EXPECT_HOSTS"] = " ".join(resolved.hosts)
+        if server.auth == AUTH_KEY:
+            env["SCREENPORT_EXPECT_KEY"] = os.path.expanduser(server.key_path.strip())
     return env
+
+
+_PASSPHRASE_PROMPT = re.compile(r"Enter passphrase for key '(?P<path>[^']*)'(?: \([^()]*\))?:")
+_PASSWORD_WORD = re.compile(r"\s*(password|mot de passe|passwort|contraseña|senha)\s*:", re.I)
+
+
+def secret_prompt_matches(prompt: str, kind: str, user: str, hosts: list[str], key_path: str = "") -> bool:
+    """Vrai uniquement pour les invites que ssh affiche lui-même pour ce secret.
+
+    * phrase de passe : « Enter passphrase for key '<clé attendue>': » ;
+    * mot de passe : « <user>@<hôte>'s password: » ou, en keyboard-interactive,
+      « (<user>@<hôte>) Password: » — jamais pour un autre hôte (ProxyJump)
+      ni pour une question arbitraire choisie par le serveur.
+    """
+    text = (prompt or "").strip()
+    if kind == "passphrase":
+        match = _PASSPHRASE_PROMPT.fullmatch(text)
+        return bool(match and key_path and match.group("path") in (key_path, key_path[:100]))
+    if kind != "password" or not user:
+        return False
+    for host in hosts:
+        if not host:
+            continue
+        if text == f"{user}@{host}'s password:":
+            return True
+        prefix = f"({user}@{host}) "
+        if text.startswith(prefix) and _PASSWORD_WORD.fullmatch(text[len(prefix):]):
+            return True
+    return False
 
 
 def command_preview(server: Server) -> str:

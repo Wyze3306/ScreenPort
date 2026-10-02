@@ -21,6 +21,12 @@ from .models import (
     sanitize_screen_name,
 )
 
+def _esc(text: str) -> str:
+    """Les lignes Adw interprètent le balisage Pango : on échappe les textes
+    venant de l'utilisateur ou du serveur."""
+    return GLib.markup_escape_text(text or "")
+
+
 _AUTH_LABELS = {
     AUTH_PASSWORD: "Mot de passe",
     AUTH_KEY: "Clé privée (fichier)",
@@ -133,7 +139,7 @@ class ServerEditorDialog(Adw.Dialog):
         auth_group.add(self.password_row)
 
         self.key_row = Adw.ActionRow(title="Fichier de clé privée", subtitle_lines=1)
-        self.key_row.set_subtitle(self.server.key_path or "Aucun fichier choisi")
+        self.key_row.set_subtitle(_esc(self.server.key_path) or "Aucun fichier choisi")
         choose = Gtk.Button(
             icon_name="document-open-symbolic",
             valign=Gtk.Align.CENTER,
@@ -282,7 +288,7 @@ class ServerEditorDialog(Adw.Dialog):
                 if path.startswith(home + os.sep):
                     path = "~" + path[len(home):]
                 self._key_path = path
-                self.key_row.set_subtitle(path)
+                self.key_row.set_subtitle(_esc(path))
                 self._validate()
 
         dialog.open(self.window, None, done)
@@ -320,7 +326,7 @@ class ServerEditorDialog(Adw.Dialog):
         server = self._collect()
         errors = server.validate()
         if errors:
-            self.toasts.add_toast(Adw.Toast(title=errors[0]))
+            self.toasts.add_toast(Adw.Toast(title=_esc(errors[0])))
             return
         secret = self._secret(server)
         save = self.save_switch.get_active() if self.save_switch is not None else True
@@ -335,7 +341,7 @@ class ServerEditorDialog(Adw.Dialog):
         if server.validate():
             return
         self.test_spinner.set_spinning(True)
-        self.test_row.set_subtitle(f"Connexion à {server.address}…")
+        self.test_row.set_subtitle(_esc(f"Connexion à {server.address}…"))
 
         def done(result: remote.RemoteResult, listing: ssh.ScreenListing):
             self._test_handle = None
@@ -355,7 +361,7 @@ class ServerEditorDialog(Adw.Dialog):
                 self.test_row.set_subtitle("✔ " + msg)
             else:
                 err = result.error()
-                self.test_row.set_subtitle(f"✖ {err.title} : {err.detail}")
+                self.test_row.set_subtitle(_esc(f"✖ {err.title} : {err.detail}"))
 
         self._test_handle = remote.list_screens(
             server, self.app.settings.prefs, self._secret(server), done
@@ -412,7 +418,7 @@ class OpenScreensDialog(Adw.Dialog):
 
         # Résumé du serveur
         summary = Adw.PreferencesGroup()
-        self.summary_row = Adw.ActionRow(title=server.address, subtitle="Connexion…")
+        self.summary_row = Adw.ActionRow(title=_esc(server.address), subtitle="Connexion…")
         badge = Gtk.Label(
             label=initials(server.display_name),
             css_classes=["server-badge", server.color],
@@ -528,7 +534,7 @@ class OpenScreensDialog(Adw.Dialog):
         self.noscreen_group.set_visible(False)
         self.summary_spinner.set_visible(True)
         self.summary_spinner.set_spinning(True)
-        self.summary_row.set_subtitle(f"Connexion à {self.server.display_name}…")
+        self.summary_row.set_subtitle(_esc(f"Connexion à {self.server.display_name}…"))
         self.refresh_button.set_sensitive(False)
         self.loading_row.set_visible(True)
         self.empty_row.set_visible(False)
@@ -579,7 +585,7 @@ class OpenScreensDialog(Adw.Dialog):
             details = [] if session.attached else [session.state_label]
             if session.date:
                 details.append(f"créé le {session.pretty_date}")
-            row.set_subtitle(" · ".join(details))
+            row.set_subtitle(_esc(" · ".join(details)))
             check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
             check.set_active(name in previously_checked or name in self.new)
             check.connect("toggled", lambda *_: self._update_open_button())
@@ -591,7 +597,7 @@ class OpenScreensDialog(Adw.Dialog):
                 row.add_suffix(pill)
             elif session.attached:
                 pill = Gtk.Label(
-                    label=session.state_label, css_classes=["status-pill", "attached"], valign=Gtk.Align.CENTER
+                    label=session.state_label[:40], css_classes=["status-pill", "attached"], valign=Gtk.Align.CENTER
                 )
                 pill.set_tooltip_text("Ce screen est affiché ailleurs")
                 row.add_suffix(pill)
@@ -700,10 +706,10 @@ class OpenScreensDialog(Adw.Dialog):
         def confirmed():
             def done(result: remote.RemoteResult):
                 if result.ok:
-                    self.toasts.add_toast(Adw.Toast(title=f"Screen « {name} » terminé"))
+                    self.toasts.add_toast(Adw.Toast(title=_esc(f"Screen « {name} » terminé")))
                     self.window.on_screen_killed(self.server, name)
                 else:
-                    self.toasts.add_toast(Adw.Toast(title=f"Impossible de terminer « {name} »"))
+                    self.toasts.add_toast(Adw.Toast(title=_esc(f"Impossible de terminer « {name} »")))
                 self.refresh()
 
             remote.run_remote(

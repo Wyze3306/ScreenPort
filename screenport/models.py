@@ -31,10 +31,10 @@ COLORS = {
     "slate": "#6f8396",
 }
 
-_HOST_RE = re.compile(r"^[\w.:%-]+$")
+_HOST_RE = re.compile(r"[\w.:%-]+")
 
 SCREEN_NAME_MAX = 64
-_SCREEN_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,%d}$" % SCREEN_NAME_MAX)
+_SCREEN_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,%d}" % SCREEN_NAME_MAX)
 
 
 def sanitize_screen_name(text: str) -> str:
@@ -53,7 +53,7 @@ def sanitize_screen_name(text: str) -> str:
 
 
 def is_valid_screen_name(name: str) -> bool:
-    return bool(_SCREEN_NAME_RE.match(name or ""))
+    return isinstance(name, str) and bool(_SCREEN_NAME_RE.fullmatch(name))
 
 
 def parse_screen_list_input(text: str) -> list[str]:
@@ -159,12 +159,17 @@ class Server:
         if not self.host.strip():
             errors.append("L'adresse du serveur est obligatoire.")
         elif (
-            not _HOST_RE.match(self.host)
+            not _HOST_RE.fullmatch(self.host)
             or self.host.startswith("-")
             or self.host.count(":") == 1
         ):
             errors.append("L'adresse du serveur n'est pas valide.")
-        if self.user.startswith("-") or any(c.isspace() for c in self.user):
+        # Mêmes règles que ssh (valid_ruser) : DOMAINE\\nom ou nom@domaine restent possibles.
+        if (
+            self.user.startswith("-")
+            or any(c.isspace() or c in "'`\";&<>|(){}" for c in self.user)
+            or self.user.endswith("\\")
+        ):
             errors.append("Le nom d'utilisateur n'est pas valide.")
         if not 1 <= int(self.port) <= 65535:
             errors.append("Le port doit être compris entre 1 et 65535.")

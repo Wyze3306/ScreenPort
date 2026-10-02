@@ -29,7 +29,7 @@ class ScreenNameTest(unittest.TestCase):
 
     def test_validation(self):
         self.assertTrue(is_valid_screen_name("web_1-a"))
-        for bad in ("", "a b", "a.b", "é", "x" * 65):
+        for bad in ("", "a b", "a.b", "é", "x" * 65, "main\n"):
             self.assertFalse(is_valid_screen_name(bad))
 
     def test_list_input(self):
@@ -57,6 +57,10 @@ class AddressTest(unittest.TestCase):
         self.assertTrue(Server(host="-oProxyCommand=x").validate())
         self.assertTrue(Server(host="host:abc").validate())
         self.assertTrue(Server(host="h", user="-x").validate())
+        self.assertTrue(Server(host="h\n").validate())
+        self.assertTrue(Server(host="h", user="a;b").validate())
+        self.assertEqual(Server(host="h", user="DOMAIN\\bob").validate(), [])
+        self.assertEqual(Server(host="h", user="bob@corp.example").validate(), [])
         self.assertTrue(Server(host="h", port=70000).validate())
         self.assertTrue(Server(host="h", auth=AUTH_KEY).validate())
 
@@ -97,8 +101,19 @@ class StoreTest(unittest.TestCase):
         self.assertFalse(prefs.multiplex)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings.json"
-            path.write_text(json.dumps({"window": {"sessions": [{"server": "a", "screen": "b"}, "junk"]}}))
-            self.assertEqual(SettingsStore(path).window.sessions, [{"server": "a", "screen": "b"}])
+            path.write_text(
+                json.dumps(
+                    {
+                        "window": {
+                            "sessions": [{"server": "a", "screen": "b", "x": 1}, "junk"],
+                            "selected_key": "bad",
+                        }
+                    }
+                )
+            )
+            window = SettingsStore(path).window
+            self.assertEqual(window.sessions, [{"server": "a", "screen": "b"}])
+            self.assertEqual(window.selected_key, {})
 
 
 class SshConfigTest(unittest.TestCase):

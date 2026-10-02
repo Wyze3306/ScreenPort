@@ -56,6 +56,27 @@ def runtime_dir() -> Path:
     return _RUNTIME_DIR
 
 
+def write_secret_file(secret: str) -> str:
+    """Écrit un secret dans un fichier éphémère (600) lu par askpass.
+
+    Le fichier est supprimé dès que ssh n'en a plus besoin (voir
+    :func:`remove_secret_file`) : le secret ne traîne ni dans l'environnement
+    des processus, ni sur le disque.
+    """
+    fd, path = tempfile.mkstemp(prefix="secret-", dir=runtime_dir())
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(secret)
+    return path
+
+
+def remove_secret_file(path: str | None) -> None:
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def askpass_path() -> str:
     """Programme SSH_ASKPASS fourni avec l'application."""
     override = os.environ.get("SCREENPORT_ASKPASS")

@@ -78,6 +78,6 @@ class ImportDialog(Adw.Dialog):
                 server.color = colors[index % len(colors)]
                 self.window.app.store.upsert(server)
                 count += 1
-        self.window.refresh_servers()
+        self.window.app.refresh_servers()
         self.window.toast(f"{count} serveur{'s' if count > 1 else ''} importé{'s' if count > 1 else ''}")
         self.close()

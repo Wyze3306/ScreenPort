@@ -63,6 +63,7 @@ class RemoteCommandTest(unittest.TestCase):
             ssh.remote_list_command(),
             ssh.remote_kill_command("main"),
             ssh.remote_rename_command("a", "b"),
+            ssh.remote_shell_command(),
         ):
             self.assertTrue(command.startswith("sh -c '"))
             self.assertNotIn("\n", command)
@@ -71,7 +72,7 @@ class RemoteCommandTest(unittest.TestCase):
             self.assertEqual(command.count("'"), 2)
 
     def test_invalid_names_rejected(self):
-        for bad in ("", "a b", "x;rm -rf /", "$(id)", "a'b", "é"):
+        for bad in ("", "a b", "x;rm -rf /", "$(id)", "a'b", "é", "main\n"):
             with self.assertRaises(ValueError):
                 ssh.remote_attach_command(bad)
             with self.assertRaises(ValueError):
@@ -82,6 +83,10 @@ class RemoteCommandTest(unittest.TestCase):
 
     def test_shell_only(self):
         self.assertIn("exec", ssh.remote_attach_command(ssh.SHELL_ONLY))
+
+    def test_ready_marker(self):
+        self.assertIn(ssh.READY_TITLE, ssh.remote_attach_command("main"))
+        self.assertIn(ssh.READY_TITLE, ssh.remote_shell_command())
 
     @unittest.skipUnless(shutil.which("sh"), "sh requis")
     def test_scripts_parse_in_sh(self):
@@ -127,15 +132,57 @@ class SshArgvTest(unittest.TestCase):
         server = Server(host="h", auth=AUTH_AGENT)
         argv = ssh.build_ssh_argv(server, ssh.SshOptions(accept_new_hostkeys=False, keepalive=0))
         self.assertEqual(argv[-1], "h")
-        self.assertIn("StrictHostKeyChecking=ask", argv)
+        # Port par défaut : pas de -p, ~/.ssh/config garde la main.
+        self.assertNotIn("-p", argv)
+        self.assertFalse(any(a.startswith("StrictHostKeyChecking") for a in argv))
         self.assertFalse(any(a.startswith("ServerAlive") for a in argv))
 
-    def test_askpass_env(self):
-        env = ssh.askpass_env("/bin/askpass", "s3cret", "password")
+    def test_user_strict_host_key_checking_is_respected(self):
+        server = Server(host="h", auth=AUTH_AGENT)
+        strict = ssh.ResolvedConfig(user="u", hosts=("h",), strict_host_key_checking="true")
+        argv = ssh.build_ssh_argv(server, ssh.SshOptions(), resolved=strict)
+        self.assertFalse(any(a.startswith("StrictHostKeyChecking") for a in argv))
+
+    def test_askpass_env_never_contains_the_secret(self):
+        server = Server(host="h", user="u", auth=AUTH_PASSWORD)
+        resolved = ssh.ResolvedConfig(user="u", hosts=("10.0.0.1", "alias"))
+        env = ssh.askpass_env("/bin/askpass", "/run/secret-x", server, resolved)
         self.assertEqual(env["SSH_ASKPASS_REQUIRE"], "force")
-        self.assertEqual(env["SCREENPORT_SECRET"], "s3cret")
-        self.assertEqual(ssh.askpass_env("/bin/askpass", None, None, force=False), {})
-        self.assertNotIn("SCREENPORT_SECRET", ssh.askpass_env("/bin/askpass", None, None))
+        self.assertEqual(env["SCREENPORT_SECRET_FILE"], "/run/secret-x")
+        self.assertEqual(env["SCREENPORT_EXPECT_HOSTS"], "10.0.0.1 alias")
+        self.assertNotIn("s3cret", "".join(env.values()))
+        self.assertEqual(ssh.askpass_env("/bin/askpass", None, server, force=False), {})
+        self.assertNotIn("SCREENPORT_SECRET_FILE", ssh.askpass_env("/bin/askpass", None, server))
+
+    def test_parse_ssh_g(self):
+        values = ssh.parse_ssh_g("user demo\nhostname 10.0.0.1\nport 22\nstricthostkeychecking ask\n")
+        self.assertEqual(values["hostname"], "10.0.0.1")
+        self.assertEqual(values["user"], "demo")
+
+
+class SecretPromptTest(unittest.TestCase):
+    hosts = ["10.0.0.1"]
+
+    def match(self, prompt, kind="password", key=""):
+        return ssh.secret_prompt_matches(prompt, kind, "demo", self.hosts, key)
+
+    def test_password_prompts_of_ssh(self):
+        self.assertTrue(self.match("demo@10.0.0.1's password: "))
+        self.assertTrue(self.match("(demo@10.0.0.1) Password: "))
+        self.assertTrue(self.match("(demo@10.0.0.1) Mot de passe : "))
+
+    def test_foreign_prompts_are_refused(self):
+        # Hôte de rebond (ProxyJump), autre utilisateur, question du serveur.
+        self.assertFalse(self.match("ops@jump's password: "))
+        self.assertFalse(self.match("root@10.0.0.1's password: "))
+        self.assertFalse(self.match("(demo@10.0.0.1) Verification code: "))
+        self.assertFalse(self.match("(demo@10.0.0.1) Enter passphrase for key '/k': ", "passphrase", "/k"))
+        self.assertFalse(self.match("(demo@10.0.0.1) Enter your password please: "))
+
+    def test_passphrase_only_for_expected_key(self):
+        self.assertTrue(self.match("Enter passphrase for key '/home/u/.ssh/id': ", "passphrase", "/home/u/.ssh/id"))
+        self.assertFalse(self.match("Enter passphrase for key '/home/u/.ssh/other': ", "passphrase", "/home/u/.ssh/id"))
+        self.assertFalse(self.match("Enter passphrase for key '/home/u/.ssh/id': ", "password", "/home/u/.ssh/id"))
 
     def test_command_preview(self):
         server = Server(host="h", user="u", port=2222, auth=AUTH_KEY, key_path="~/k")
