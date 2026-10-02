@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import signal
 import time
 
@@ -376,7 +377,10 @@ class TerminalPane(Gtk.Box):
                 "La reconnexion automatique a échoué. Réessayez quand le serveur sera joignable."
             )
             return
-        self._countdown = _RECONNECT_DELAYS[self.reconnect_attempts]
+        # Léger décalage aléatoire : quand plusieurs onglets d'un même serveur
+        # tombent ensemble, le premier rétablit la connexion partagée et les
+        # suivants la réutilisent au lieu de s'authentifier chacun.
+        self._countdown = _RECONNECT_DELAYS[self.reconnect_attempts] + random.randint(0, 2)
         self.reconnect_attempts += 1
         self.banner_cancel.set_visible(True)
         self._update_countdown()
