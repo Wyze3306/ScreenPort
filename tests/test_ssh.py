@@ -115,6 +115,7 @@ class SshArgvTest(unittest.TestCase):
         self.assertIn("ControlMaster=auto", argv)
         self.assertIn("ControlPath=/run/x/cm-%C", argv)
         self.assertIn("StrictHostKeyChecking=accept-new", argv)
+        self.assertIn("IPQoS=none", argv)
         separator = argv.index("--")
         self.assertEqual(argv[separator + 1:], ["alice@example.org", "true"])
 
@@ -136,6 +137,12 @@ class SshArgvTest(unittest.TestCase):
         self.assertNotIn("-p", argv)
         self.assertFalse(any(a.startswith("StrictHostKeyChecking") for a in argv))
         self.assertFalse(any(a.startswith("ServerAlive") for a in argv))
+
+    def test_qos_marking_can_be_kept(self):
+        server = Server(host="h", auth=AUTH_AGENT, disable_qos=False)
+        argv = ssh.build_ssh_argv(server, ssh.SshOptions())
+        # Option désactivée : ~/.ssh/config garde la main sur IPQoS.
+        self.assertFalse(any(a.startswith("IPQoS") for a in argv))
 
     def test_user_strict_host_key_checking_is_respected(self):
         server = Server(host="h", auth=AUTH_AGENT)
@@ -186,6 +193,8 @@ class SecretPromptTest(unittest.TestCase):
 
     def test_command_preview(self):
         server = Server(host="h", user="u", port=2222, auth=AUTH_KEY, key_path="~/k")
+        self.assertEqual(ssh.command_preview(server), "ssh -o IPQoS=none -p 2222 -i '~/k' u@h")
+        server.disable_qos = False
         self.assertEqual(ssh.command_preview(server), "ssh -p 2222 -i '~/k' u@h")
 
 

@@ -364,6 +364,8 @@ def build_ssh_argv(
         opts.append(("PreferredAuthentications", "password,keyboard-interactive,publickey"))
     if password_prompts:
         opts.append(("NumberOfPasswordPrompts", str(int(password_prompts))))
+    if server.disable_qos:
+        opts.append(("IPQoS", "none"))
 
     use_mux = options.multiplex if multiplex is None else multiplex
     if use_mux and runtime_dir:
@@ -462,6 +464,8 @@ def secret_prompt_matches(prompt: str, kind: str, user: str, hosts: list[str], k
 def command_preview(server: Server) -> str:
     """Commande ssh « humaine » à copier dans un terminal."""
     parts = ["ssh"]
+    if server.disable_qos:
+        parts += ["-o", "IPQoS=none"]
     if server.port and server.port != 22:
         parts += ["-p", str(server.port)]
     if server.auth == AUTH_KEY and server.key_path:
@@ -510,7 +514,11 @@ def humanize_ssh_error(stderr: str, exit_code: int) -> SshError:
             "Aucun serveur SSH n'écoute sur ce port, ou un pare-feu bloque la connexion.",
         )
     if "timed out" in lowered:
-        return SshError("Délai dépassé", "Le serveur ne répond pas (réseau, pare-feu ou adresse).")
+        return SshError(
+            "Délai dépassé",
+            "Le serveur ne répond pas (réseau, pare-feu ou adresse). Si le serveur répond "
+            "par ailleurs, activez « Désactiver le marquage QoS » dans ses paramètres.",
+        )
     if "no route to host" in lowered or "network is unreachable" in lowered:
         return SshError("Serveur injoignable", "Aucune route réseau vers ce serveur.")
     if "connection closed" in lowered or "connection reset" in lowered:

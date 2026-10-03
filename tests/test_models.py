@@ -87,6 +87,11 @@ class StoreTest(unittest.TestCase):
             again.remove(server.id)
             self.assertEqual(ServerStore(path).servers, [])
 
+    def test_disable_qos_defaults_on_for_old_profiles(self):
+        # Profils enregistrés par la 1.0.0 : pas de champ disable_qos.
+        self.assertTrue(Server.from_dict({"host": "h"}).disable_qos)
+        self.assertFalse(Server.from_dict({"host": "h", "disable_qos": False}).disable_qos)
+
     def test_corrupted_file_is_kept_aside(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "servers.json"

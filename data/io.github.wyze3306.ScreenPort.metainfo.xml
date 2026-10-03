@@ -40,6 +40,11 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.0" date="2026-10-03">
+      <description>
+        <p>Option par serveur pour désactiver le marquage QoS (IPQoS) de ssh, activée par défaut.</p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-10-02">
       <description>
         <p>Première version.</p>

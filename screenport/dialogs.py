@@ -207,6 +207,18 @@ class ServerEditorDialog(Adw.Dialog):
             self.save_switch = None
         page.add(extra)
 
+        # -- Réseau -----------------------------------------------------
+        network = Adw.PreferencesGroup(title="Réseau")
+        self.qos_row = Adw.SwitchRow(
+            title="Désactiver le marquage QoS (IPQoS)",
+            subtitle="Certains réseaux (box, partage de connexion 4G/5G) jettent les paquets "
+            "marqués par ssh : la connexion expire sans raison apparente.",
+            subtitle_lines=3,
+        )
+        self.qos_row.set_active(self.server.disable_qos)
+        network.add(self.qos_row)
+        page.add(network)
+
         # -- Test -------------------------------------------------------
         test_group = Adw.PreferencesGroup()
         self.test_row = Adw.ActionRow(
@@ -303,6 +315,7 @@ class ServerEditorDialog(Adw.Dialog):
         server.auth = self._auth()
         server.key_path = self._key_path.strip() if server.auth == AUTH_KEY else ""
         server.remember_secret = self.remember_row.get_active()
+        server.disable_qos = self.qos_row.get_active()
         server.favorite_screens = parse_screen_list_input(self.favorites_row.get_text())
         server.color = next((c for c, b in self.color_buttons.items() if b.get_active()), "blue")
         return server

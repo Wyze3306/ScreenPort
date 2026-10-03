@@ -120,6 +120,9 @@ class Server:
     auth: str = AUTH_PASSWORD
     key_path: str = ""
     remember_secret: bool = True
+    # IPQoS=none : certains réseaux (box, partage de connexion 4G/5G) jettent
+    # les paquets que ssh marque en QoS, et la connexion finit en délai dépassé.
+    disable_qos: bool = True
     color: str = "blue"
     favorite_screens: list[str] = field(default_factory=list)
     last_used: float = 0.0
@@ -198,6 +201,7 @@ class Server:
             server.port = 22
         if server.auth not in AUTH_METHODS:
             server.auth = AUTH_PASSWORD
+        server.disable_qos = bool(server.disable_qos)
         if server.color not in COLORS:
             server.color = "blue"
         if not isinstance(server.favorite_screens, list):

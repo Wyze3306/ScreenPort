@@ -2,7 +2,7 @@
 
 APP_ID = "io.github.wyze3306.ScreenPort"
 APP_NAME = "ScreenPort"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 WEBSITE = "https://github.com/Wyze3306/ScreenPort"
 
 # Versions des bibliothèques GObject utilisées (doit précéder tout import

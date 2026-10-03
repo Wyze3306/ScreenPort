@@ -1,3 +1,11 @@
+screenport (1.1.0) unstable; urgency=medium
+
+  * Per-server option to disable ssh QoS marking (IPQoS=none), on by
+    default: some networks (ISP boxes, 4G/5G tethering) drop marked packets
+    and the connection times out.
+
+ -- Wyze3306 <Wyze3306@users.noreply.github.com>  Sat, 03 Oct 2026 16:00:00 +0000
+
 screenport (1.0.0) unstable; urgency=medium
 
   * Initial release: SSH connections (password, key or agent), named GNU

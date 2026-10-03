@@ -39,6 +39,8 @@ un redémarrage de votre PC).
 - **Reconnexion automatique** après une coupure, et **réouverture des onglets** au démarrage.
 - **Terminal confortable** : 10 thèmes de couleurs, zoom, copier/coller, liens cliquables (Ctrl+clic).
 - Import des hôtes de `~/.ssh/config`, mode clair/sombre, raccourcis clavier.
+- **Marquage QoS désactivable** par serveur (`IPQoS=none`, activé par défaut) : certains
+  réseaux jettent les paquets marqués par ssh et la connexion expire sans raison apparente.
 
 | Ouvrir des screens | Onglets (thème sombre) |
 | --- | --- |
